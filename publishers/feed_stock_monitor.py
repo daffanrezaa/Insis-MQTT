@@ -60,30 +60,33 @@ def _publish_stock(client: mqtt.Client):
     logger.info(f"[STOCK] {round(stock_kg, 2)}kg | {round(days_remaining, 1)} days | {status}")
 
 
+def on_connect(client, userdata, flags, reason_code, props):
+    if reason_code == 0:
+        dispensed_wildcard = "farm/pond/+/feeder/dispensed"
+        client.subscribe(dispensed_wildcard, qos=1)
+        logger.info(f"Feed Stock Monitor subscribed to {dispensed_wildcard}")
+
+
 def run_feed_stock_monitor():
     global stock_kg
 
     client = make_client(client_id="feed-stock-monitor", receive_maximum=8)
     connect_v5(client, host=BROKER_HOST, port=BROKER_PORT)
 
-    def on_message(c, u, msg, props=None):
+    def on_message(client, userdata, msg):
         global stock_kg
         try:
             data = json.loads(msg.payload)
             dispensed = float(data.get("dispensed_kg", 0))
             stock_kg = max(0.0, stock_kg - dispensed)
             logger.debug(f"[STOCK] Deducted {dispensed}kg. Remaining: {round(stock_kg, 2)}kg")
-            _publish_stock(c)
+            _publish_stock(client)
         except (json.JSONDecodeError, KeyError, ValueError) as e:
             logger.error(f"[STOCK] Bad dispensed payload: {e}")
 
+    client.on_connect = on_connect
     client.on_message = on_message
     client.loop_start()
-
-    # Subscribe to all dispensed events
-    dispensed_wildcard = "farm/pond/+/feeder/dispensed"
-    client.subscribe(dispensed_wildcard, qos=1)
-    logger.info(f"Feed Stock Monitor subscribed to {dispensed_wildcard}")
 
     # Publish initial stock
     _publish_stock(client)

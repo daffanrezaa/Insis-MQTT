@@ -4,6 +4,7 @@ import CountUpModule from 'react-countup'
 const CountUp = CountUpModule.default ?? CountUpModule
 import { useFarmStore } from '../../store/useFarmStore'
 import StatusDot from '../atoms/StatusDot'
+import { formatPondName } from '../../utils/statusHelpers'
 
 const AeratorIcon = ({ status }) => {
   const color = status === 'active'  ? 'var(--ok)'
@@ -63,7 +64,7 @@ export default function PondCard({ pondId }) {
           color: selected ? 'var(--accent)' : 'var(--text-primary)',
           lineHeight: 1,
         }}>
-          {pondId}
+          {formatPondName(pondId)}
         </div>
         <StatusDot status={hasData ? status : 'offline'} />
       </div>

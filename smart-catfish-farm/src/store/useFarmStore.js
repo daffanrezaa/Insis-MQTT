@@ -87,11 +87,11 @@ export const useFarmStore = create((set, get) => ({
           }
         }
 
-        if (section === 'aerator') {
+        if (section === 'aerator' && sub !== 'control') {
           pond.aerator = { ...(pond.aerator ?? {}), ...payload }
         }
 
-        if (section === 'feeder') {
+        if (section === 'feeder' && sub !== 'control') {
           pond.feeder = { ...(pond.feeder ?? {}), ...payload }
           if (sub === 'dispensed' && payload.dispensed_kg) {
             return {

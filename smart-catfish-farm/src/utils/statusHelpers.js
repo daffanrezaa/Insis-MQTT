@@ -19,3 +19,15 @@ export function getStatusColor(status) {
     default:         return 'var(--offline)'
   }
 }
+
+/**
+ * Format pond ID from "P01" to "Kolam 1"
+ */
+export function formatPondName(pondId) {
+  if (!pondId) return ''
+  if (pondId.startsWith('P')) {
+    const num = parseInt(pondId.substring(1), 10)
+    if (!isNaN(num)) return `Kolam ${num}`
+  }
+  return pondId
+}

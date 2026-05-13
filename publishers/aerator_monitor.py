@@ -3,6 +3,7 @@
 Aerator Monitor — most safety-critical publisher.
 LWT fires if this process dies unexpectedly, signalling aerator comms failure.
 Simulates random aerator failures (especially dangerous at night).
+Now also subscribes to manual control commands from the Dashboard.
 """
 
 import json
@@ -14,7 +15,7 @@ from config.settings import BROKER_HOST, BROKER_PORT, POND_IDS, Topics
 from config.mqtt_helpers import make_client, connect_v5, make_publish_props, ts
 from loguru import logger
 
-AERATOR_STATES = ["active", "idle", "offline", "error"]
+AERATOR_STATES = ["active", "idle", "offline", "error", "boost"]
 
 
 class AeratorSimulator:
@@ -25,6 +26,17 @@ class AeratorSimulator:
         self.uptime_minutes = 0
         self.failure_countdown = None  # None = no pending failure
 
+    def handle_command(self, action: str):
+        if action == "boost":
+            self.status = "boost"
+            self.power_w = random.uniform(350, 450)
+            logger.success(f"[AERATOR CONTROL] {self.pond_id} switched to BOOST mode")
+            # Force an immediate publish update could be done here, but tick() will handle it within 5s
+        elif action == "shutdown":
+            self.status = "offline"
+            self.power_w = 0
+            logger.warning(f"[AERATOR CONTROL] {self.pond_id} forced SHUTDOWN")
+
     def tick(self) -> dict:
         """Advance state by one tick (5 seconds = 1/12 minute)."""
         if self.failure_countdown is not None:
@@ -33,11 +45,11 @@ class AeratorSimulator:
                 self.status = "offline" if random.random() < 0.7 else "error"
                 self.failure_countdown = None
         elif self.status in ("offline", "error"):
-            # Auto-recover after 30–90 seconds
+            # Auto-recover after 30–90 seconds (unless forced shutdown, but for simulation we let it recover)
             if random.random() < 0.03:
                 self.status = "active"
                 logger.info(f"[AERATOR] {self.pond_id} recovered")
-        else:
+        elif self.status not in ("boost",):
             # 0.3% chance each tick of a new failure
             if random.random() < 0.003:
                 self.failure_countdown = random.randint(2, 6)
@@ -46,6 +58,13 @@ class AeratorSimulator:
         if self.status == "active":
             self.uptime_minutes += 1 / 12
             self.power_w = random.uniform(150, 300)
+        elif self.status == "boost":
+            self.uptime_minutes += 1 / 12
+            self.power_w = random.uniform(350, 450)
+            # 5% chance each tick to automatically return to normal active from boost
+            if random.random() < 0.05:
+                self.status = "active"
+                logger.info(f"[AERATOR] {self.pond_id} boost mode ended naturally")
         else:
             self.power_w = 0
 
@@ -58,9 +77,51 @@ class AeratorSimulator:
         }
 
 
-def run_aerator_monitor():
-    simulators = {pid: AeratorSimulator(pid) for pid in POND_IDS}
+simulators = {pid: AeratorSimulator(pid) for pid in POND_IDS}
 
+def on_connect(client, userdata, flags, reason_code, props):
+    if reason_code == 0:
+        client.subscribe("farm/pond/+/aerator/control", qos=1)
+        logger.info("Aerator Monitor subscribed to control topics")
+
+def on_message(client, userdata, msg):
+    try:
+        payload = json.loads(msg.payload)
+        topic_parts = msg.topic.split("/")
+        pond_id = topic_parts[2] # farm/pond/P01/aerator/control
+        action = payload.get("action")
+        
+        if pond_id in simulators and action:
+            sim = simulators[pond_id]
+            sim.handle_command(action)
+            # Immediately publish updated status so frontend gets instant feedback
+            props = make_publish_props(
+                expiry_seconds=60,
+                user_props={"pond_id": pond_id, "device_id": f"aerator-{pond_id}"},
+            )
+            status_payload = json.dumps({
+                "pond_id": pond_id,
+                "status": sim.status,
+                "timestamp": ts(),
+            })
+            client.publish(
+                Topics.fmt(Topics.AERATOR_STATUS, pond_id=pond_id),
+                status_payload, qos=1, retain=True, properties=props,
+            )
+            power_payload = json.dumps({
+                "pond_id": pond_id,
+                "power_consumption": round(sim.power_w, 1),
+                "timestamp": ts(),
+            })
+            client.publish(
+                Topics.fmt(Topics.AERATOR_POWER, pond_id=pond_id),
+                power_payload, qos=1, retain=True, properties=props,
+            )
+            logger.info(f"[AERATOR] Published immediate status update for {pond_id}: {sim.status}")
+    except Exception as e:
+        logger.error(f"[AERATOR] Error processing command: {e}")
+
+def run_aerator_monitor():
     client = make_client(client_id="aerator-monitor", receive_maximum=16)
     connect_v5(
         client,
@@ -75,8 +136,12 @@ def run_aerator_monitor():
         },
         lwt_qos=1,
     )
+    
+    client.on_connect = on_connect
+    client.on_message = on_message
     client.loop_start()
-    logger.info("Aerator Monitor started")
+    
+    logger.info("Aerator Monitor started and listening for commands")
 
     try:
         while True:

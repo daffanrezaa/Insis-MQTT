@@ -4,6 +4,7 @@ import { useFarmStore } from '../../store/useFarmStore'
 import { format } from 'date-fns'
 import StatusDot from '../atoms/StatusDot'
 import { Wind, Power, Utensils } from 'lucide-react'
+import { formatPondName } from '../../utils/statusHelpers'
 
 const slideIn = {
   initial: { x: 340, opacity: 0 },
@@ -57,7 +58,7 @@ export default function DetailPanel({ pondId }) {
             transform: 'rotate(-1deg)',
             display: 'inline-block',
           }}>
-            {pondId}
+            {formatPondName(pondId)}
           </h1>
           {pond?.cycle && (
             <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: 4 }}>
@@ -236,7 +237,8 @@ function ActionButton({ icon, label, onClick }) {
 }
 
 function AeratorSection({ pondId, aerator }) {
-  const isActive = aerator?.status === 'active' || aerator?.status === 'normal'
+  const isBoost = aerator?.status === 'boost'
+  const isActive = aerator?.status === 'active' || aerator?.status === 'normal' || isBoost
   const publish = useFarmStore(s => s.mqttPublish)
 
   const handleAction = (action) => {
@@ -248,14 +250,14 @@ function AeratorSection({ pondId, aerator }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, paddingBottom: 8, borderBottom: '1px solid var(--bg-border)' }}>
         <span style={{ fontSize: '0.9rem', color: 'var(--text-primary)' }}>Status</span>
         <span className="badge" style={{ 
-          background: isActive ? 'var(--ok)' : 'var(--warn-fill)',
-          color: isActive ? 'var(--bg-panel)' : 'var(--warn)',
+          background: isBoost ? 'var(--accent)' : isActive ? 'var(--ok)' : 'var(--warn-fill)',
+          color: isBoost ? '#fff' : isActive ? 'var(--bg-panel)' : 'var(--warn)',
           border: `2px solid var(--bg-border)`,
           boxShadow: `2px 2px 0 var(--bg-border)`,
           padding: '4px 8px',
           fontWeight: 700,
         }}>
-          {isActive ? 'ALL ACTIVE' : 'ISSUES DETECTED'}
+          {isBoost ? 'BOOST MODE' : isActive ? 'ALL ACTIVE' : 'ISSUES DETECTED'}
         </span>
       </div>
       <div style={{ display: 'flex', gap: 10 }}>
@@ -268,6 +270,7 @@ function AeratorSection({ pondId, aerator }) {
 
 function FeederSection({ pondId, feeder }) {
   const isLow = feeder?.remaining_kg < 2
+  const isSkipped = feeder?.status === 'skip_next' || feeder?.status === 'skipped'
   const publish = useFarmStore(s => s.mqttPublish)
 
   const handleSkip = () => {
@@ -279,8 +282,8 @@ function FeederSection({ pondId, feeder }) {
       <DataRow label="Next Feed" value={feeder?.next_feed_time ? format(new Date(feeder.next_feed_time), 'HH:mm') : '16:00'} unit="(15kg)" />
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', marginBottom: 12 }}>
         <span style={{ color: 'var(--text-primary)', fontFamily: 'var(--font-body)', fontSize: '0.8rem' }}>Hopper Level</span>
-        <span style={{ fontFamily: 'var(--font-badge)', fontSize: '0.85rem', fontWeight: 700, color: isLow ? 'var(--warn)' : 'var(--ok)' }}>
-          {isLow ? 'LOW' : 'OK'}
+        <span style={{ fontFamily: 'var(--font-badge)', fontSize: '0.85rem', fontWeight: 700, color: isSkipped ? 'var(--accent)' : isLow ? 'var(--warn)' : 'var(--ok)' }}>
+          {isSkipped ? 'SKIPPED' : isLow ? 'LOW' : 'OK'}
         </span>
       </div>
       <motion.button 

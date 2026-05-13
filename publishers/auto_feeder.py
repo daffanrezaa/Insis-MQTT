@@ -6,6 +6,7 @@ Auto Feeder:
 - QoS 1 for status updates
 - Retains `remaining` topic so dashboard always shows last known stock
 - Publishes to shared feed_stock_monitor via event
+- Subscribes to manual control commands from Dashboard (e.g. skip_next)
 """
 
 import json
@@ -29,9 +30,15 @@ class FeederSimulator:
         self.remaining_kg = 10.0  # per-feeder hopper
         self.last_fed = None
         self.last_fed_kg = 0.0
+        self.skip_next = False
 
     def dispense(self) -> dict | None:
         """Attempt to dispense feed. Returns None if jammed or empty."""
+        if self.skip_next:
+            self.skip_next = False
+            logger.info(f"[FEEDER] {self.pond_id} skipped feeding as requested")
+            return None
+
         if self.remaining_kg < 0.1:
             self.status = "offline"
             return None
@@ -52,6 +59,12 @@ class FeederSimulator:
             "timestamp"   : self.last_fed,
         }
 
+    def handle_command(self, action: str):
+        if action == "skip_next":
+            self.skip_next = True
+            self.status = "skip_next"
+            logger.success(f"[FEEDER CONTROL] {self.pond_id} set to SKIP NEXT FEED")
+
 
 feeders = {pid: FeederSimulator(pid) for pid in POND_IDS}
 _last_fed_minute: dict[str, str] = {}  # pond_id → HH:MM of last feed
@@ -65,6 +78,41 @@ def _is_feed_time() -> bool:
     return _current_hhmm() in FEED_SCHEDULE
 
 
+def on_connect(client, userdata, flags, reason_code, props):
+    if reason_code == 0:
+        client.subscribe("farm/pond/+/feeder/control", qos=1)
+        logger.info("Auto Feeder subscribed to control topics")
+
+
+def on_message(client, userdata, msg):
+    try:
+        payload = json.loads(msg.payload)
+        topic_parts = msg.topic.split("/")
+        pond_id = topic_parts[2] # farm/pond/P01/feeder/control
+        action = payload.get("action")
+        
+        if pond_id in feeders and action:
+            feeder = feeders[pond_id]
+            feeder.handle_command(action)
+            # Immediately publish updated status so frontend gets instant feedback
+            status_payload = json.dumps({
+                "pond_id"     : pond_id,
+                "status"      : feeder.status,
+                "remaining_kg": round(feeder.remaining_kg, 2),
+                "last_fed"    : feeder.last_fed,
+                "timestamp"   : ts(),
+            })
+            client.publish(
+                Topics.fmt(Topics.FEEDER_STATUS, pond_id=pond_id),
+                status_payload,
+                qos=1,
+                retain=True,
+            )
+            logger.info(f"[FEEDER] Published immediate status update for {pond_id}: {feeder.status}")
+    except Exception as e:
+        logger.error(f"[FEEDER] Error processing command: {e}")
+
+
 def run_auto_feeder(cycle_day: int = 1):
     client = make_client(client_id="auto-feeder", receive_maximum=16)
     connect_v5(
@@ -75,8 +123,12 @@ def run_auto_feeder(cycle_day: int = 1):
         lwt_payload={"device": "auto-feeder-all", "status": "OFFLINE", "timestamp": ts()},
         lwt_qos=1,
     )
+    
+    client.on_connect = on_connect
+    client.on_message = on_message
     client.loop_start()
-    logger.info("Auto Feeder started")
+    
+    logger.info("Auto Feeder started and listening for commands")
 
     def publish_schedule():
         """Publish feeding schedule for all ponds at startup (QoS 2)."""
@@ -132,8 +184,8 @@ def run_auto_feeder(cycle_day: int = 1):
                         )
                         logger.info(f"[FEEDER] {pond_id} dispensed {result['dispensed_kg']}kg")
 
-                    else:
-                        # Jam or empty alert
+                    elif feeder.status in ("jammed", "offline"):
+                        # Jam or empty alert (don't alert if it was just skipped)
                         alert = {
                             "pond_id": pond_id,
                             "device" : f"feeder-{pond_id}",

@@ -33,7 +33,10 @@ export function useMqtt() {
       
       setMqttPublish((topic, message) => {
         if (client.connected) {
+          console.log('[MQTT PUBLISH]', topic, message)
           client.publish(topic, JSON.stringify(message), { qos: 1 })
+        } else {
+          console.warn('[MQTT PUBLISH] Client not connected, cannot publish to', topic)
         }
       })
 
